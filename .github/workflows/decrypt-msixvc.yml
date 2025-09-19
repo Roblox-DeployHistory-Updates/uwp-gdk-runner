@@ -25,8 +25,8 @@ jobs:
         id: extract
         shell: pwsh
         run: |
-          $contentId = (Get-Content product.json | ConvertFrom-Json).Products[0].DisplaySkuAvailabilities[0].Sku.Properties.Packages[0].ContentId
-          $lastUpdateDate = (Get-Content product.json | ConvertFrom-Json).Products[0].DisplaySkuAvailabilities[0].Sku.Properties.LastUpdateDate
+          $contentId = (Get-Content products.json | ConvertFrom-Json).Products[0].DisplaySkuAvailabilities[0].Sku.Properties.Packages[0].ContentId
+          $lastUpdateDate = (Get-Content products.json | ConvertFrom-Json).Products[0].DisplaySkuAvailabilities[0].Sku.Properties.LastUpdateDate
           Write-Output "contentId=$contentId" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           Write-Output "lastUpdateDate=$lastUpdateDate" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
