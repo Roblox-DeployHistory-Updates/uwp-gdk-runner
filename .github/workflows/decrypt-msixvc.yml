@@ -1,4 +1,5 @@
 name: Decrypt & Extract MSIXVC
+permissions: write-all
 
 on:
   workflow_dispatch:
@@ -7,8 +8,6 @@ on:
 jobs:
   decrypt:
     runs-on: windows-latest
-    permissions:
-      contents: write
     defaults:
       run:
         shell: pwsh
