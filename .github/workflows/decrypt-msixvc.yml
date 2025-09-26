@@ -2,50 +2,105 @@ name: Decrypt & Extract MSIXVC
 permissions: write-all
 
 on:
+  schedule:
+    - cron: "0 * * * *"
   workflow_dispatch:
-    inputs:
-      msixvc_url:
-        description: 'URL to the .msixvc file'
-        required: true
-        type: string
+  push:
 
 jobs:
   decrypt:
     runs-on: ubuntu-latest
+    env:
+      PRODUCTS_URL: https://displaycatalog.mp.microsoft.com/v7.0/products?bigIds=9PMF91N3LZ3M&market=US&languages=en-US,neutral&MS-CV=DGU1mcuYo0WMMp+F.1
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      - name: Prepare variables
-        id: prep
+      - name: Download products.json
         run: |
-          url='${{ github.event.inputs.msixvc_url }}'
-          if [ -z "$url" ]; then echo "msixvc_url input is required." && exit 1; fi
-          filename=$(basename "$url")
-          if [ -z "$filename" ]; then echo "Couldn't determine filename from URL: $url" && exit 1; fi
+          curl -sSL "$PRODUCTS_URL" -o products.json
+          cat products.json
+
+      - name: Extract info
+        id: extract
+        run: |
+          contentId=$(jq -r '.Products[0].DisplaySkuAvailabilities[0].Sku.Properties.Packages[0].ContentId' products.json)
+          lastUpdateDate=$(jq -r '.Products[0].DisplaySkuAvailabilities[0].Sku.Properties.LastUpdateDate' products.json)
+          echo "contentId=$contentId" >> "$GITHUB_OUTPUT"
+          echo "lastUpdateDate=$lastUpdateDate" >> "$GITHUB_OUTPUT"
+
+      - name: Get latest release LastUpdateDate
+        id: get_latest
+        continue-on-error: true
+        run: |
+          latest_json=$(curl -sSL \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            https://api.github.com/repos/${{ github.repository }}/releases/latest)
+
+          desc=$(echo "$latest_json" | jq -r '.body // ""')
+          if echo "$desc" | grep -q 'LastUpdateDate:'; then
+            latest_lud=$(echo "$desc" | grep -o 'LastUpdateDate: .*' | cut -d' ' -f2)
+            echo "latest_last_update=$latest_lud" >> "$GITHUB_OUTPUT"
+          else
+            echo "latest_last_update=none" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Get download URL from MsixvcPackageDownloader
+        id: apicall
+        if: steps.extract.outputs.lastUpdateDate != steps.get_latest.outputs.latest_last_update
+        env:
+          PUSH_KEY: ${{ secrets.SECRET_POST_TOKEN }}
+        run: |
+          curl -sSL "https://github.com/Yakov5776/MsixvcPackageDownloader/releases/download/release-v1.5/linux-x64-build.zip" -o MsixvcPackageDownloader.zip
+          unzip -q MsixvcPackageDownloader.zip
+          chmod +x MsixvcPackageDownloader
+          cat << 'EOF' > token.json
+          ${{ secrets.MS_TOKEN }}
+          EOF
+          
+          msixvc_url=$(./MsixvcPackageDownloader ${{ steps.extract.outputs.contentId }})
+          if [ -z "$msixvc_url" ]; then
+            echo "MsixvcPackageDownloader failed, trying to refresh token..."
+            auth_json=$(curl -sSL -X POST "${{ secrets.SECRET_POST_URL }}?mode=refresh" -H "x-access-key: $PUSH_KEY")
+            auth_url=$(echo "$auth_json" | jq -r '.authUrl')
+            echo "$auth_url" > authUrl.txt
+            echo "Retrying MsixvcPackageDownloader with refreshed token..."
+            msixvc_url=$(./MsixvcPackageDownloader ${{ steps.extract.outputs.contentId }})
+          fi
+
+          filename=$(basename "$msixvc_url")
           decryptedName="${filename%.msixvc}.decrypted.msixvc"
-          outputDir="unpacked-output"
           releaseName="${filename%.*}"
 
-          echo "url=$url" >> $GITHUB_ENV
+          echo "msixvc_url=$msixvc_url" >> $GITHUB_ENV
           echo "filename=$filename" >> $GITHUB_ENV
           echo "decryptedName=$decryptedName" >> $GITHUB_ENV
-          echo "outputDir=$outputDir" >> $GITHUB_ENV
           echo "releaseName=$releaseName" >> $GITHUB_ENV
 
-      - name: Download MSIXVC
+      - name: Update MS_TOKEN secret
+        if: steps.extract.outputs.lastUpdateDate != steps.get_latest.outputs.latest_last_update
+        env:
+          UPDATE_URL:  ${{ secrets.SECRET_POST_URL }}
+          PUSH_KEY: ${{ secrets.SECRET_POST_TOKEN }}
         run: |
-          echo "Downloading $filename from $url"
-          curl -L "$url" -o "$filename"
-          ls -lh "$filename"
+          NEW_TOKEN=$(cat token.json)
+          ENCODED_VALUE=$(echo -n "$NEW_TOKEN" | base64)
 
-      - name: Download Products Info
+          curl -X POST "$UPDATE_URL" \
+            -H "Content-Type: application/json" \
+            -H "x-access-key: $PUSH_KEY" \
+            -d @- << EOF
+          {"value": "$ENCODED_VALUE"}
+          EOF
+
+      - name: Download MSIXVC
+        if: steps.extract.outputs.lastUpdateDate != steps.get_latest.outputs.latest_last_update
         run: |
-          productUrl="https://displaycatalog.mp.microsoft.com/v7.0/products?bigIds=9PMF91N3LZ3M&market=US&languages=en-US,neutral&MS-CV=DGU1mcuYo0WMMp+F.1"
-          curl -L "$productUrl" -o "products.json"
+          curl -sSL "$msixvc_url" -o "$filename"
 
       - name: Download XVDTool (v0.53)
+        if: steps.extract.outputs.lastUpdateDate != steps.get_latest.outputs.latest_last_update
         run: |
           curl -sSL "https://github.com/emoose/xvdtool/releases/download/v0.53/XVDTool-0.53.0.0-linux-x64.zip" -o XVDTool.zip
           mkdir -p XVDTool
@@ -56,10 +111,12 @@ jobs:
 
       - name: Setup .NET Core
         uses: actions/setup-dotnet@v4
+        if: steps.extract.outputs.lastUpdateDate != steps.get_latest.outputs.latest_last_update
         with:
           dotnet-version: '3.1.x'
 
       - name: Decrypt the .msixvc (using xvdtool)
+        if: steps.extract.outputs.lastUpdateDate != steps.get_latest.outputs.latest_last_update
         run: |
           cp "$filename" "$decryptedName"
           decryptedPath="$(realpath "$decryptedName")"
@@ -68,20 +125,24 @@ jobs:
           if [ $? -ne 0 ]; then echo "xvdtool decrypt command failed." && exit 1; fi
 
       - name: Extract and zip files from decrypted .msixvc
+        if: steps.extract.outputs.lastUpdateDate != steps.get_latest.outputs.latest_last_update
         run: |
           decryptedPath="$(realpath "$decryptedName")"
-          outdir="$outputDir"
+          outdir="unpacked-output"
           mkdir -p "$outdir"
           echo "Extracting to $outdir ..."
           XVDTool/XVDTool -nd -xf "$outdir" "$decryptedPath"
           if [ $? -ne 0 ]; then echo "xvdtool extract command failed." && exit 1; fi
           zip -r "${releaseName}-unpacked.zip" "$outdir"
 
-
       - name: Create Release
         uses: ncipollo/release-action@v1
+        if: steps.extract.outputs.lastUpdateDate != steps.get_latest.outputs.latest_last_update
         with:
           artifacts: "${{ env.filename }},${{ env.decryptedName }},${{ env.releaseName }}-unpacked.zip,products.json"
           tag: ${{ env.releaseName }}
           name: ${{ env.releaseName }}
-          body: ${{ env.releaseName }}
+          body: |
+            ${{ env.releaseName }}
+
+            LastUpdateDate: ${{ steps.extract.outputs.lastUpdateDate }}
