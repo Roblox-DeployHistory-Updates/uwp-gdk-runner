@@ -1,4 +1,5 @@
 name: Decrypt & Extract MSIXVC
+permissions: write-all
 
 on:
   workflow_dispatch:
@@ -10,12 +11,8 @@ on:
 
 jobs:
   decrypt:
-    runs-on: windows-latest
-    permissions:
-      contents: write
-    defaults:
-      run:
-        shell: pwsh
+    runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -23,37 +20,39 @@ jobs:
       - name: Prepare variables
         id: prep
         run: |
-          $url = '${{ github.event.inputs.msixvc_url }}'
-          if (-not $url) { throw "msixvc_url input is required." }
-          $filename = [System.IO.Path]::GetFileName($url)
-          if (-not $filename) { throw "Couldn't determine filename from URL: $url" }
-          $decryptedName = [System.IO.Path]::ChangeExtension($filename, '.decrypted.msixvc')
-          $outputDir = "unpacked-output"
-          $releaseName = [System.IO.Path]::GetFileNameWithoutExtension($filename)
-          echo "url=$url" >> $env:GITHUB_ENV
-          echo "filename=$filename" >> $env:GITHUB_ENV
-          echo "decryptedName=$decryptedName" >> $env:GITHUB_ENV
-          echo "outputDir=$outputDir" >> $env:GITHUB_ENV
-          echo "releaseName=$releaseName" >> $env:GITHUB_ENV
+          url='${{ github.event.inputs.msixvc_url }}'
+          if [ -z "$url" ]; then echo "msixvc_url input is required." && exit 1; fi
+          filename=$(basename "$url")
+          if [ -z "$filename" ]; then echo "Couldn't determine filename from URL: $url" && exit 1; fi
+          decryptedName="${filename%.msixvc}.decrypted.msixvc"
+          outputDir="unpacked-output"
+          releaseName="${filename%.*}"
+
+          echo "url=$url" >> $GITHUB_ENV
+          echo "filename=$filename" >> $GITHUB_ENV
+          echo "decryptedName=$decryptedName" >> $GITHUB_ENV
+          echo "outputDir=$outputDir" >> $GITHUB_ENV
+          echo "releaseName=$releaseName" >> $GITHUB_ENV
 
       - name: Download MSIXVC
         run: |
-          Write-Host "Downloading $env:filename from $env:url"
-          Invoke-WebRequest -Uri $env:url -OutFile $env:filename
-          Get-Item $env:filename | Format-List
+          echo "Downloading $filename from $url"
+          curl -L "$url" -o "$filename"
+          ls -lh "$filename"
 
       - name: Download Products Info
         run: |
-          $productUrl = "https://displaycatalog.mp.microsoft.com/v7.0/products?bigIds=9PMF91N3LZ3M&market=US&languages=en-US,neutral&MS-CV=DGU1mcuYo0WMMp+F.1"
-          Invoke-WebRequest -Uri $productUrl -OutFile "products.json"
+          productUrl="https://displaycatalog.mp.microsoft.com/v7.0/products?bigIds=9PMF91N3LZ3M&market=US&languages=en-US,neutral&MS-CV=DGU1mcuYo0WMMp+F.1"
+          curl -L "$productUrl" -o "products.json"
 
       - name: Download XVDTool (v0.53)
         run: |
-          $xvdUrl = 'https://github.com/emoose/xvdtool/releases/download/v0.53/XVDTool-0.53.0.0-win-x64.zip'
-          $zip = 'xvdtool.zip'
-          Invoke-WebRequest -Uri $xvdUrl -OutFile $zip
-          Expand-Archive -Path $zip -DestinationPath tools -Force
-          Write-Host "XVDTool expanded to tools"
+          curl -sSL "https://github.com/emoose/xvdtool/releases/download/v0.53/XVDTool-0.53.0.0-linux-x64.zip" -o XVDTool.zip
+          mkdir -p XVDTool
+          unzip -q -o XVDTool.zip -d XVDTool
+          chmod +x XVDTool/XVDTool
+          curl -o /tmp/libssl1.1.deb http://archive.ubuntu.com/ubuntu/pool/main/o/openssl/libssl1.1_1.1.1f-1ubuntu2.24_amd64.deb
+          sudo dpkg -i /tmp/libssl1.1.deb
 
       - name: Setup .NET Core
         uses: actions/setup-dotnet@v4
@@ -62,24 +61,22 @@ jobs:
 
       - name: Decrypt the .msixvc (using xvdtool)
         run: |
-          $xvdExe = Get-ChildItem -Path tools -Filter 'xvdtool.exe' -Recurse | Select-Object -First 1
-          if (-not $xvdExe) { throw "xvdtool.exe not found under tools/ after unzip." }
-          Copy-Item -Path $env:filename -Destination $env:decryptedName -Force
-          $decryptedPath = (Resolve-Path $env:decryptedName).Path
-          Write-Host "Running decrypt on: $decryptedPath with $($xvdExe.FullName)"
-          & $xvdExe.FullName -nd -eu -cik "5ef5d34b-1201-d8dd-921f-635e939947e0" -cikfile "5ef5d34b-1201-d8dd-921f-635e939947e0.cik" $decryptedPath
-          if ($LASTEXITCODE -ne 0) { throw "xvdtool decrypt command failed (exit $LASTEXITCODE)." }
+          cp "$filename" "$decryptedName"
+          decryptedPath="$(realpath "$decryptedName")"
+          echo "Running decrypt on: $decryptedPath"
+          XVDTool/XVDTool -nd -eu -cik "5ef5d34b-1201-d8dd-921f-635e939947e0" -cikfile "5ef5d34b-1201-d8dd-921f-635e939947e0.cik" "$decryptedPath"
+          if [ $? -ne 0 ]; then echo "xvdtool decrypt command failed." && exit 1; fi
 
       - name: Extract and zip files from decrypted .msixvc
         run: |
-          $xvdExe = Get-ChildItem -Path tools -Filter 'xvdtool.exe' -Recurse | Select-Object -First 1
-          $decryptedPath = (Resolve-Path $env:decryptedName).Path
-          $outdir = $env:outputDir
-          New-Item -Path $outdir -ItemType Directory -Force | Out-Null
-          Write-Host "Extracting to $outdir ..."
-          & $xvdExe.FullName -nd -xf $outdir $decryptedPath
-          if ($LASTEXITCODE -ne 0) { throw "xvdtool extract command failed (exit $LASTEXITCODE)." }
-          Compress-Archive -Path ${{ env.outputDir }} -DestinationPath "${{ env.releaseName }}-unpacked.zip"
+          decryptedPath="$(realpath "$decryptedName")"
+          outdir="$outputDir"
+          mkdir -p "$outdir"
+          echo "Extracting to $outdir ..."
+          XVDTool/XVDTool -nd -xf "$outdir" "$decryptedPath"
+          if [ $? -ne 0 ]; then echo "xvdtool extract command failed." && exit 1; fi
+          zip -r "${releaseName}-unpacked.zip" "$outdir"
+
 
       - name: Create Release
         uses: ncipollo/release-action@v1
