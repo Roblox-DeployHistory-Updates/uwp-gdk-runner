@@ -153,7 +153,7 @@ jobs:
           curl -s -X POST \
             -H "Accept: application/json" \
             -H "Authorization: LOW ${{ secrets.ARCHIVE_ORG_ACCESS_KEY }}:${{ secrets.ARCHIVE_ORG_SECRET_KEY }}" \
-            --data-urlencode "url=${product_url}" \
+            --data-urlencode "url=$PRODUCTS_URL" \
             -d "capture_outlinks=1" \
             https://web.archive.org/save
 
