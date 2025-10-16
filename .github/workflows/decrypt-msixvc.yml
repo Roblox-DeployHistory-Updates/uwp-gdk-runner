@@ -94,13 +94,23 @@ jobs:
           {"value": "$ENCODED_VALUE"}
           EOF
 
-      - name: Download MSIXVC
+      - name: Check if tag already exists
+        id: tagcheck
         if: steps.extract.outputs.lastUpdateDate != steps.get_latest.outputs.latest_last_update
+        run: |
+          if git ls-remote --tags origin | grep -q "refs/tags/${{ env.releaseName }}$"; then
+            echo "tag_exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag_exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download MSIXVC
+        if: steps.extract.outputs.lastUpdateDate != steps.get_latest.outputs.latest_last_update && steps.tagcheck.outputs.tag_exists == 'false'
         run: |
           curl -sSL "$msixvc_url" -o "$filename"
 
       - name: Download XVDTool (v0.53)
-        if: steps.extract.outputs.lastUpdateDate != steps.get_latest.outputs.latest_last_update
+        if: steps.extract.outputs.lastUpdateDate != steps.get_latest.outputs.latest_last_update && steps.tagcheck.outputs.tag_exists == 'false'
         run: |
           curl -sSL "https://github.com/emoose/xvdtool/releases/download/v0.53/XVDTool-0.53.0.0-linux-x64.zip" -o XVDTool.zip
           mkdir -p XVDTool
@@ -110,13 +120,13 @@ jobs:
           sudo dpkg -i /tmp/libssl1.1.deb
 
       - name: Setup .NET Core
-        uses: actions/setup-dotnet@v4
-        if: steps.extract.outputs.lastUpdateDate != steps.get_latest.outputs.latest_last_update
+        uses: actions/setup-dotnet@v5
+        if: steps.extract.outputs.lastUpdateDate != steps.get_latest.outputs.latest_last_update && steps.tagcheck.outputs.tag_exists == 'false'
         with:
           dotnet-version: '3.1.x'
 
       - name: Decrypt the .msixvc (using xvdtool)
-        if: steps.extract.outputs.lastUpdateDate != steps.get_latest.outputs.latest_last_update
+        if: steps.extract.outputs.lastUpdateDate != steps.get_latest.outputs.latest_last_update && steps.tagcheck.outputs.tag_exists == 'false'
         run: |
           cp "$filename" "$decryptedName"
           decryptedPath="$(realpath "$decryptedName")"
@@ -125,7 +135,7 @@ jobs:
           if [ $? -ne 0 ]; then echo "xvdtool decrypt command failed." && exit 1; fi
 
       - name: Extract and zip files from decrypted .msixvc
-        if: steps.extract.outputs.lastUpdateDate != steps.get_latest.outputs.latest_last_update
+        if: steps.extract.outputs.lastUpdateDate != steps.get_latest.outputs.latest_last_update && steps.tagcheck.outputs.tag_exists == 'false'
         run: |
           decryptedPath="$(realpath "$decryptedName")"
           outdir="unpacked-output"
@@ -137,7 +147,7 @@ jobs:
 
       - name: Create Release
         uses: ncipollo/release-action@v1
-        if: steps.extract.outputs.lastUpdateDate != steps.get_latest.outputs.latest_last_update
+        if: steps.extract.outputs.lastUpdateDate != steps.get_latest.outputs.latest_last_update && steps.tagcheck.outputs.tag_exists == 'false'
         with:
           artifacts: "${{ env.filename }},${{ env.decryptedName }},${{ env.releaseName }}-unpacked.zip,products.json"
           tag: ${{ env.releaseName }}
@@ -148,7 +158,7 @@ jobs:
             LastUpdateDate: ${{ steps.extract.outputs.lastUpdateDate }}
 
       - name: Archive product and MSIXVC URLs to Wayback Machine
-        if: steps.extract.outputs.lastUpdateDate != steps.get_latest.outputs.latest_last_update
+        if: steps.extract.outputs.lastUpdateDate != steps.get_latest.outputs.latest_last_update && steps.tagcheck.outputs.tag_exists == 'false'
         run: |
           curl -s -X POST \
             -H "Accept: application/json" \
