@@ -2,7 +2,7 @@
 
 
 ### pipeline:
-1. use [MsixvcPackageDownloader](https://github.com/LukeFZ/MsixvcPackageDownloader) to get the download link (build this from source, precompiled binary doesn't work)
+1. use [MsixvcPackageDownloader](https://github.com/LukeFZ/MsixvcPackageDownloader) to get the download link (build this from source, precompiled binary doesn't work) (update: this repo now uses [msixvcdl-expressjs](https://github.com/Yakov5776/msixvcdl-expressjs) instead.)
 
 2. after installing roblox normally using Microsoft Store, compile & use [cikextractor](https://github.com/LukeFZ/CikExtractor) with [workaround patch](https://github.com/LukeFZ/CikExtractor/issues/9#issuecomment-2677569101) to dump cik. alternatively, you can use our [pre-dumped cik file](https://github.com/Roblox-DeployHistory-Updates/uwp-gdk-runner/raw/refs/heads/main/5ef5d34b-1201-d8dd-921f-635e939947e0.cik).
 
