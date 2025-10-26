@@ -55,6 +55,7 @@ jobs:
           POST_KEY: ${{ secrets.SECRET_POST_TOKEN }}
         run: |
           msixvc_req=$(curl -sSL -X GET "https://msixvc.yakov.cloud/msixvc/$PRODUCTS_ID" -H "Authorization: Bearer $POST_KEY")
+          echo "$msixvc_req" | jq -e '.debugInfo?' >/dev/null && echo "$msixvc_req" | jq '.debugInfo'
           msixvc_url=$(echo "$msixvc_req" | jq -r '.files[0].url')
           if [ -z "$msixvc_url" ]; then
             echo "Error: No XVC URL found"
